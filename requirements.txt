@@ -1,0 +1,6 @@
+# 웹 서버
+fastapi
+uvicorn
+python-multipart
+# 분석 파이프라인 (AI 저장소 requirements.txt 와 동일)
+-r ../AI/requirements.txt
