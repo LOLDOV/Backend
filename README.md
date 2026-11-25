@@ -25,7 +25,29 @@ python -m venv .venv
 .venv/bin/python -m uvicorn app.server:app --port 8000    # http://localhost:8000
 ```
 
-Qwen 키는 AI 저장소의 `.env`에 둔다 (`AI/.env.example` 참고). 키가 없으면 규칙 기반 코칭으로 동작하고 질의응답은 꺼진다.
+## API 키 설정 (.env)
+
+VLM 장면 분석과 질의응답에 쓰는 키는 AI 저장소의 `.env`에 둔다 (`AI/.env.example` 참고).
+키가 없으면 규칙 기반 코칭으로 동작하고 질의응답은 꺼진다. 설정을 바꾸면 서버를 다시 켠다.
+
+Gemini 키를 쓸 때 (OpenAI 호환 방식이라 변수 이름은 그대로 둔다):
+
+```
+DASHSCOPE_API_KEY=<Gemini API 키>
+DASHSCOPE_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+QWEN_MODEL=gemini-3.6-flash
+VLM_THINKING_TOKENS=8000    # Gemini는 '생각' 토큰도 한도에 포함돼 답변이 잘리므로 여유분을 준다
+```
+
+- 키는 각자 [Google AI Studio](https://aistudio.google.com) → Get API key 에서 발급받아도 된다.
+- `.env`는 절대 GitHub에 올리지 않는다 (`.gitignore`에 포함됨). 키를 채팅·문서에 붙여 넣지 않는다.
+
+### 사용 한도 주의
+
+무료 키는 분당 요청 한도가 낮다. 한도(429)에 걸리면 질의응답은 10·20·30초 기다리며 최대 3번 다시 시도하고,
+그래도 안 되면 "1분쯤 뒤에 다시 질문해 주세요"를 띄운다.
+팀원 여럿이 동시에 쓰거나 시연 중 질문을 연달아 할 예정이면, AI Studio에서 결제를 연결해 유료 등급으로 올리거나
+한도가 더 높은 팀원 키를 쓰는 게 안전하다.
 
 ## API
 
