@@ -246,7 +246,7 @@ def ask(job_id: str, body: Question):
     if result_dir is None:
         raise HTTPException(404, '분석 결과를 찾을 수 없습니다.')
     if not vlm_available():
-        raise HTTPException(409, '질의응답은 Qwen API 키(.env)가 설정되어야 사용할 수 있습니다.')
+        raise HTTPException(409, '질의응답은 API 키(.env)가 설정되어야 사용할 수 있습니다.')
     if not body.question.strip():
         raise HTTPException(400, '질문을 입력하세요.')
     try:
