@@ -1,0 +1,13 @@
+[Unit]
+Description=LOLDOV coach web server
+After=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/loldov/Backend
+ExecStart=/home/ubuntu/loldov/.venv/bin/python -m uvicorn app.server:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

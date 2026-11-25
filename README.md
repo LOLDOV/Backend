@@ -49,6 +49,10 @@ VLM_THINKING_TOKENS=8000    # Gemini는 '생각' 토큰도 한도에 포함돼 �
 팀원 여럿이 동시에 쓰거나 시연 중 질문을 연달아 할 예정이면, AI Studio에서 결제를 연결해 유료 등급으로 올리거나
 한도가 더 높은 팀원 키를 쓰는 게 안전하다.
 
+## 배포
+
+고정 주소 https://168-110-28-55.sslip.io 는 Oracle Cloud 서버에서 돈다. 설치·코드 반영 방법은 [deploy/oracle/README.md](deploy/oracle/README.md).
+
 ## API
 
 | 메서드 | 경로 | 설명 |
