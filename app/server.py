@@ -238,6 +238,20 @@ def get_job(job_id: str):
     return job
 
 
+@app.delete('/api/jobs/{job_id}')
+def delete_job(job_id: str):
+    # 업로드한 분석만 지울 수 있다 (예시 경기는 지우지 않는다)
+    result_dir = resolve_result_dir(job_id)
+    if result_dir is None or result_dir.parent != JOB_DIR:
+        raise HTTPException(404, '삭제할 분석 기록을 찾을 수 없습니다.')
+    job = read_job(job_id) or {}
+    if job.get('status') in ('queued', 'running'):
+        raise HTTPException(409, '분석 중인 기록은 끝난 뒤에 삭제할 수 있습니다.')
+    with lock:
+        shutil.rmtree(result_dir)
+    return {'deleted': job_id}
+
+
 class Question(BaseModel):
     question: str
     history: list = []
