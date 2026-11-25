@@ -51,7 +51,3 @@ journalctl -u loldov -n 50            # 앱 로그 (분석 오류 등)
 sudo systemctl status caddy           # HTTPS
 ```
 
-## 비용
-
-무료 체험 크레딧(SGD 400, 2026-11-24 시작, 약 30일)으로 운영한다. Pay As You Go로 업그레이드하지 않으면 요금이 청구되지 않고,
-체험이 끝나면 이 인스턴스(Always Free 아님)는 중지·삭제된다. 필요 없어지면 콘솔에서 Terminate (boot volume 함께 삭제).
