@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import threading
+import time
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from openai import RateLimitError
 from pydantic import BaseModel
 
 # 리플레이 영상 업로드 -> 분석 -> 코칭 리포트 웹 서버
@@ -39,6 +41,7 @@ ALLOWED_EXT = {'.mp4', '.webm', '.mkv', '.mov'}
 MAX_UPLOAD_BYTES = 4 * 1024 ** 3
 CHUNK = 8 * 1024 * 1024
 KEEP_UPLOADS = False
+ASK_RETRY_WAITS = (10, 20, 30)  # 무료 API 키의 분당 요청 한도(429)에 걸리면 기다렸다가 다시 묻는다
 STAGE_LABELS = {
     'queued': '대기 중', 'uploaded': '업로드 완료', 'scan': '영상 스캔 (HUD 인식)', 'player': '플레이어 팀 판별',
     'scenes': '주요 장면 선정', 'frames': '대표 프레임 추출', 'vlm': 'VLM 장면 분석', 'coach': '코칭 리포트 작성',
@@ -249,10 +252,16 @@ def ask(job_id: str, body: Question):
         raise HTTPException(409, '질의응답은 API 키(.env)가 설정되어야 사용할 수 있습니다.')
     if not body.question.strip():
         raise HTTPException(400, '질문을 입력하세요.')
-    try:
-        return {'answer': answer_question(result_dir, body.question, body.history)}
-    except Exception as exc:
-        raise HTTPException(502, f'LLM 호출 실패: {type(exc).__name__}: {exc}')
+    for wait in (*ASK_RETRY_WAITS, None):
+        try:
+            return {'answer': answer_question(result_dir, body.question, body.history)}
+        except RateLimitError:
+            if wait is None:
+                raise HTTPException(429, '질문이 몰려 AI 사용 한도에 걸렸습니다. 1분쯤 뒤에 다시 질문해 주세요.')
+            time.sleep(wait)
+        except Exception as exc:
+            traceback.print_exc()
+            raise HTTPException(502, f'LLM 호출 실패: {type(exc).__name__}: {exc}')
 
 
 @app.get('/')
