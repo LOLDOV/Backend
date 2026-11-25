@@ -257,7 +257,8 @@ def ask(job_id: str, body: Question):
 
 @app.get('/')
 def index():
-    return FileResponse(STATIC_DIR / 'index.html')
+    # 화면을 수정하면 바로 보이도록 브라우저가 예전 페이지를 캐시해 두지 않게 한다
+    return FileResponse(STATIC_DIR / 'index.html', headers={'Cache-Control': 'no-cache'})
 
 
 def recover_interrupted_jobs():
