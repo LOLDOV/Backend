@@ -42,6 +42,16 @@ VLM_THINKING_TOKENS=8000    # Gemini는 '생각' 토큰도 한도에 포함돼 �
 - 키는 각자 [Google AI Studio](https://aistudio.google.com) → Get API key 에서 발급받아도 된다.
 - `.env`는 절대 GitHub에 올리지 않는다 (`.gitignore`에 포함됨). 키를 채팅·문서에 붙여 넣지 않는다.
 
+데스 장면 코칭(AI/link)은 업로드할 때 경기 ID와 Riot ID를 함께 넣으면 실행된다. 추가로 필요한 값:
+
+```
+GEMINI_API_KEY=<Gemini API 키>      # link는 Google SDK로 직접 호출 (위 키와 같아도 됨)
+RIOT_API_KEY=RGAPI-...               # developer.riotgames.com 개발 키, 24시간마다 만료
+```
+
+`RIOT_API_KEY`가 없거나 만료되면 업로드 화면의 입력칸이 잠기고 기본 분석만 한다.
+데스 1번마다 Gemini를 한 번 더 부르므로 무료 키 한도로는 부족할 수 있다.
+
 ### 사용 한도 주의
 
 무료 키는 분당 요청 한도가 낮다. 한도(429)에 걸리면 질의응답은 10·20·30초 기다리며 최대 3번 다시 시도하고,

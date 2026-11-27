@@ -1,5 +1,7 @@
+import contextlib
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -10,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from openai import RateLimitError
@@ -45,8 +47,14 @@ ASK_RETRY_WAITS = (10, 20, 30)  # 무료 API 키의 분당 요청 한도(429)에
 STAGE_LABELS = {
     'queued': '대기 중', 'uploaded': '업로드 완료', 'scan': '영상 스캔 (HUD 인식)', 'player': '플레이어 팀 판별',
     'scenes': '주요 장면 선정', 'frames': '대표 프레임 추출', 'vlm': 'VLM 장면 분석', 'coach': '코칭 리포트 작성',
+    'death': '데스 장면 코칭 (Riot 기록)',
     'done': '완료', 'error': '실패',
 }
+
+# 데스 장면 코칭: AI/link (Riot 경기 기록 + 패치 문서 + Gemini). 경기 ID와 Riot ID를 함께 받았을 때만 실행한다.
+LINK_DIR = RESULT_DIR / 'link'
+LINK_RUN_TAG = 'web'
+MATCH_ID_RE = re.compile(r'^[A-Z0-9]+_\d+$')
 
 app = FastAPI(title='LOLDOV Coach')
 executor = ThreadPoolExecutor(max_workers=1)  # 분석은 CPU를 많이 써서 한 번에 하나씩
@@ -93,7 +101,35 @@ def frame_url(path):
     return '/files/' + rel.as_posix()
 
 
-def process(job_id, video_path, use_vlm):
+def death_available():
+    load_ai_env()
+    # .env.example 의 YOUR_API_KEY_HERE 같은 빈칸 값은 키로 치지 않는다 (Riot 키는 RGAPI- 로 시작)
+    riot = os.getenv('RIOT_API_KEY', '').split('#')[0].strip()
+    return riot.startswith('RGAPI-') and bool(os.getenv('GEMINI_API_KEY', '').strip())
+
+
+def load_ai_env():
+    from dotenv import load_dotenv
+    load_dotenv(AI_DIR / '.env', override=True)  # Riot 개발 키는 매일 바뀌므로 매번 다시 읽는다
+
+
+def run_death_coaching(job_id, video_path, out_dir, match_id, riot_id):
+    # 실패해도 기본 리포트는 그대로 둔다. 결과: AI/results/link/<작업ID>/web/full/results.json
+    write_job(job_id, status='running', stage='death', progress=0.99)
+    try:
+        from link.run import main as link_main
+        with contextlib.redirect_stdout(sys.stderr):
+            link_main(['run', '--video', str(video_path), '--video-id', job_id, '--match-id', match_id,
+                       '--riot-id', riot_id, '--conditions', 'full', '--run-tag', LINK_RUN_TAG,
+                       '--scan-cache', str(out_dir / 'scan.json'), '--fetch', '--execute'])
+        write_job(job_id, death_status='done', death_error=None)
+    except (Exception, SystemExit) as exc:
+        traceback.print_exc()
+        message = re.sub(r'RGAPI-[\w-]+', '[RIOT_KEY]', f'{type(exc).__name__}: {exc}')[:400]
+        write_job(job_id, death_status='error', death_error=message)
+
+
+def process(job_id, video_path, use_vlm, match_id=None, riot_id=None):
     out_dir = JOB_DIR / job_id
 
     def progress(stage, fraction):
@@ -102,6 +138,8 @@ def process(job_id, video_path, use_vlm):
     try:
         write_job(job_id, status='running', stage='scan', progress=0.0, started_at=datetime.now().astimezone().isoformat())
         pipeline.run(video_path, use_vlm=use_vlm, out_dir=out_dir, progress=progress)
+        if match_id and riot_id:
+            run_death_coaching(job_id, video_path, out_dir, match_id, riot_id)
         write_job(job_id, status='done', stage='done', progress=1.0, finished_at=datetime.now().astimezone().isoformat())
     except Exception as exc:
         traceback.print_exc()
@@ -114,12 +152,27 @@ def process(job_id, video_path, use_vlm):
 
 @app.get('/api/config')
 def config():
-    return {'vlm_available': vlm_available(), 'max_upload_gb': MAX_UPLOAD_BYTES / 1024 ** 3,
-            'allowed': sorted(ALLOWED_EXT)}
+    return {'vlm_available': vlm_available(), 'death_available': death_available(),
+            'max_upload_gb': MAX_UPLOAD_BYTES / 1024 ** 3, 'allowed': sorted(ALLOWED_EXT)}
+
+
+def riot_inputs(match_id, riot_id):
+    # 둘 다 비우면 데스 코칭 없이 분석한다
+    match_id, riot_id = (match_id or '').strip().upper(), (riot_id or '').strip()
+    if not match_id and not riot_id:
+        return None, None
+    if not MATCH_ID_RE.match(match_id):
+        raise HTTPException(400, '경기 ID 형식이 맞지 않습니다. 예) KR_1234567890')
+    if '#' not in riot_id:
+        raise HTTPException(400, 'Riot ID는 닉네임#태그 형식으로 입력하세요. 예) Hide on bush#KR1')
+    if not death_available():
+        raise HTTPException(409, '서버에 Riot API 키가 없어 데스 장면 코칭을 할 수 없습니다. 경기 ID와 Riot ID를 비우고 올려 주세요.')
+    return match_id, riot_id
 
 
 @app.post('/api/upload')
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...), match_id: str = Form(''), riot_id: str = Form('')):
+    match_id, riot_id = riot_inputs(match_id, riot_id)
     ext = Path(file.filename or '').suffix.lower()
     if ext not in ALLOWED_EXT:
         raise HTTPException(400, f'지원하지 않는 형식입니다 ({", ".join(sorted(ALLOWED_EXT))})')
@@ -143,8 +196,8 @@ async def upload(file: UploadFile = File(...)):
     use_vlm = vlm_available()
     write_job(job_id, id=job_id, filename=file.filename, size_mb=round(size / 1024 ** 2, 1),
               created_at=datetime.now().astimezone().isoformat(), status='queued', stage='queued',
-              progress=0.0, use_vlm=use_vlm)
-    executor.submit(process, job_id, dest, use_vlm)
+              progress=0.0, use_vlm=use_vlm, match_id=match_id)
+    executor.submit(process, job_id, dest, use_vlm, match_id, riot_id)
     return read_job(job_id)
 
 
@@ -155,10 +208,13 @@ pending_uploads = {}
 class UploadInit(BaseModel):
     filename: str
     size: int
+    match_id: str = ''
+    riot_id: str = ''
 
 
 @app.post('/api/upload/init')
 def upload_init(body: UploadInit):
+    match_id, riot_id = riot_inputs(body.match_id, body.riot_id)
     ext = Path(body.filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         raise HTTPException(400, f'지원하지 않는 형식입니다 ({", ".join(sorted(ALLOWED_EXT))})')
@@ -169,7 +225,8 @@ def upload_init(body: UploadInit):
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     path = UPLOAD_DIR / f'{job_id}{ext}.part'
     path.write_bytes(b'')
-    pending_uploads[job_id] = {'path': path, 'filename': body.filename, 'size': body.size, 'received': 0}
+    pending_uploads[job_id] = {'path': path, 'filename': body.filename, 'size': body.size, 'received': 0,
+                               'match_id': match_id, 'riot_id': riot_id}
     return {'upload_id': job_id, 'chunk_bytes': CHUNK * 6}
 
 
@@ -202,8 +259,8 @@ def upload_complete(upload_id: str):
     use_vlm = vlm_available()
     write_job(upload_id, id=upload_id, filename=up['filename'], size_mb=round(up['size'] / 1024 ** 2, 1),
               created_at=datetime.now().astimezone().isoformat(), status='queued', stage='queued',
-              progress=0.0, use_vlm=use_vlm)
-    executor.submit(process, upload_id, dest, use_vlm)
+              progress=0.0, use_vlm=use_vlm, match_id=up['match_id'])
+    executor.submit(process, upload_id, dest, use_vlm, up['match_id'], up['riot_id'])
     return read_job(upload_id)
 
 
@@ -234,8 +291,27 @@ def get_job(job_id: str):
         if not payload.get('coaching'):
             from vlm.coach import build_coaching
             payload['coaching'] = build_coaching(result_dir)
+        payload['deaths'] = death_payload(job_id)
         job['report'] = payload
     return job
+
+
+def death_payload(job_id):
+    # link 결과(results.json)를 리포트 화면용으로 줄인다. 실행하지 않았으면 None
+    path = LINK_DIR / job_id / LINK_RUN_TAG / 'full' / 'results.json'
+    if not path.is_file():
+        return None
+    out = []
+    for r in json.loads(path.read_text(encoding='utf-8')):
+        item = {'scene_id': r['scene_id'], 'game_time': r.get('death_game_time'), 'skipped': r.get('skipped')}
+        if not r.get('skipped'):
+            folder = path.parent.parent / 'frames' / f"{r['scene_id']}_{r['start_sec']:.0f}"
+            item.update(killer=r.get('killer'), start=r.get('start'), end=r.get('end'), coaching=r['coaching'],
+                        held=len(r.get('claims_held') or []), records=r.get('records') or {},
+                        docs={k: f"[{d['patch']}] {d['text'][:200]}" for k, d in (r.get('docs') or {}).items()},
+                        frames=[frame_url(f) for f in sorted(folder.glob('*.jpg'))])
+        out.append(item)
+    return out
 
 
 @app.delete('/api/jobs/{job_id}')
@@ -249,6 +325,7 @@ def delete_job(job_id: str):
         raise HTTPException(409, '분석 중인 기록은 끝난 뒤에 삭제할 수 있습니다.')
     with lock:
         shutil.rmtree(result_dir)
+        shutil.rmtree(LINK_DIR / job_id, ignore_errors=True)
     return {'deleted': job_id}
 
 
